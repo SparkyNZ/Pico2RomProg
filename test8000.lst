@@ -1,0 +1,28 @@
+ca65 V2.19 - Git bb1b5c3
+Main file   : test8000.asm
+Current file: test8000.asm
+
+000000r 1               .org $0000
+000000  1               
+000000  1               ; Fill memory from $0000 to $7FFF with $EA (NOP)
+000000  1  EA EA EA EA  .res $8000, $EA
+000004  1  EA EA EA EA  
+000008  1  EA EA EA EA  
+008000  1               
+008000  1               ;start will be at $8000 - no need for ORG
+008000  1               start:
+008000  1  A9 01            LDA #$01
+008002  1  8D 00 C0         STA $C000
+008005  1  A9 05            LDA #$05
+008007  1  8D 00 D0         STA $D000
+00800A  1  4C 00 80         JMP start
+00800D  1               
+00800D  1               ; Pad the remaining space from the end of the program up to the vectors at $FFFC
+00800D  1  EA EA EA EA  .res $FFFC - *, $EA
+008011  1  EA EA EA EA  
+008015  1  EA EA EA EA  
+00FFFC  1               
+00FFFC  1               ; 6502 Reset Vector at $FFFC
+00FFFC  1  00 80        .word start    ; Automatically writes low byte then high byte
+00FFFE  1  00 80        .word start    ; $FFFE: IRQ/BRK vector
+00FFFE  1               

@@ -1,0 +1,34 @@
+ca65 V2.19 - Git bb1b5c3
+Main file   : test.asm
+Current file: test.asm
+
+000000r 1               .org $0000    ; Relative offset within the 32KB ROM image ($8000 physical)
+000000  1               physical_start = $8000
+000000  1               
+000000  1               ; --- 1. Character ROM (0x0000 - 0x0FFF in file -> $8000 CPU) ---
+000000  1  3C 66 6E 6E  .incbin "characters.901225-01.bin"    ; 4,096 bytes ($1000 hex)
+000004  1  60 62 3C 00  
+000008  1  18 3C 66 7E  
+001000  1               
+001000  1               ; --- 2. Pad from 0x1000 up to 0x2000 (CPU $A000) ---
+001000  1  EA EA EA EA  .res $2000 - *, $EA
+001004  1  EA EA EA EA  
+001008  1  EA EA EA EA  
+002000  1               
+002000  1               ; --- 3. Code Start (0x2000 in file -> $A000 CPU) ---
+002000  1               start:
+002000  1  A9 01            LDA #$01
+002002  1  8D 00 C0         STA $C000
+002005  1  A9 05            LDA #$05
+002007  1  8D 00 D0         STA $D000
+00200A  1  4C 00 20         JMP start
+00200D  1               
+00200D  1               ; --- 4. Pad from current location up to 0x7FFC (CPU $FFFC) ---
+00200D  1  EA EA EA EA  .res $7FFC - *, $EA
+002011  1  EA EA EA EA  
+002015  1  EA EA EA EA  
+007FFC  1               
+007FFC  1               ; --- 5. 6502 Reset Vectors (0x7FFC - 0x7FFF in file -> $FFFC CPU) ---
+007FFC  1  00 A0        .word start + physical_start    ; $7FFC/$7FFD: Reset vector points to 'start' label
+007FFE  1  00 A0        .word start + physical_start    ; $7FFE/$7FFF: IRQ/BRK vector
+007FFE  1               
