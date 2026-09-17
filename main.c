@@ -1,6 +1,6 @@
 //-------------------------------------------------------------------------------------------------------------
 // RP2350B SST39VF040 Programmer
-// Updated pin mappings based on final routed PCB layout
+// Clean 32KB write with robust write timing and polling
 //-------------------------------------------------------------------------------------------------------------
 
 #include "pico/stdlib.h"
@@ -23,9 +23,8 @@ static const uint DATA_PINS[8] = {
     30, 28, 26, 23, 21, 19, 17, 24
 };
 
-// Memory locations in RP2350 flash
-const uint8_t *payload      = (const uint8_t *)0x10080000;
-const uint32_t *verify_flag = (const uint32_t *)0x10088000;
+// Memory location in RP2350 flash
+static const uint8_t *payload = (const uint8_t *)0x10080000;
 
 //-------------------------------------------------------------------------------------------------------------
 // Low-Level Bus Helpers
@@ -67,37 +66,73 @@ void flash_write_cycle(uint32_t addr, uint8_t data) {
     set_address(addr);
     write_data_bus(data);
     set_data_dir(true);
+    sleep_us(1);          // Address/Data setup time
 
     gpio_put(PIN_PCS, 0); // Assert /CE
     gpio_put(PIN_PWE, 0); // Assert /WE
-    sleep_us(1);          // tWP min is 150ns
+    sleep_us(2);          // tWP min is 100ns (2us gives clean margin)
 
-    gpio_put(PIN_PWE, 1); // De-assert /WE (latches data)
+    gpio_put(PIN_PWE, 1); // De-assert /WE (latches data on rising edge)
     gpio_put(PIN_PCS, 1); // De-assert /CE
+    sleep_us(1);          // Hold time
+
     set_data_dir(false);
 }
 
 uint8_t flash_read_cycle(uint32_t addr) {
     set_address(addr);
     set_data_dir(false);
+    sleep_us(1);
 
     gpio_put(PIN_PCS, 0); // Assert /CE
     gpio_put(PIN_POE, 0); // Assert /OE
-    sleep_us(1);          // tAA max is 70ns
+    sleep_us(2);          // tAA max is 70ns
 
     uint8_t val = read_data_bus();
 
     gpio_put(PIN_POE, 1);
     gpio_put(PIN_PCS, 1);
+    sleep_us(1);
     return val;
 }
 
 //-------------------------------------------------------------------------------------------------------------
-// SST39VF040 Commands
+// SST39VF040 Commands & Hardware Polling
 //-------------------------------------------------------------------------------------------------------------
 
 void sst39_write_cmd(uint32_t addr, uint8_t data) {
     flash_write_cycle(addr, data);
+}
+
+void sst39_poll_dq7(uint32_t addr, uint8_t byte) {
+    uint8_t expected_dq7 = byte & 0x80;
+    uint32_t timeout = 10000;
+
+    while (timeout--) {
+        uint8_t read_val = flash_read_cycle(addr);
+        if ((read_val & 0x80) == expected_dq7) {
+            return; // Programming/erase pass completed
+        }
+        sleep_us(5);
+    }
+    printf("Timeout polling DQ7 at address 0x%05X!\n", addr);
+}
+
+void check_sst39_id() {
+    sst39_write_cmd(0x5555, 0xAA);
+    sst39_write_cmd(0x2AAA, 0x55);
+    sst39_write_cmd(0x5555, 0x90);
+    sleep_us(10);
+
+    uint8_t mfg_id = flash_read_cycle(0x00000);
+    uint8_t dev_id = flash_read_cycle(0x00001);
+
+    sst39_write_cmd(0x5555, 0xAA);
+    sst39_write_cmd(0x2AAA, 0x55);
+    sst39_write_cmd(0x5555, 0xF0);
+    sleep_us(10);
+
+    printf("SST39VF040 ID Read: Manufacturer = 0x%02X (Expected 0xBF), Device = 0x%02X (Expected 0xD7)\n", mfg_id, dev_id);
 }
 
 void sst39_chip_erase() {
@@ -107,15 +142,21 @@ void sst39_chip_erase() {
     sst39_write_cmd(0x5555, 0xAA);
     sst39_write_cmd(0x2AAA, 0x55);
     sst39_write_cmd(0x5555, 0x10);
-    sleep_ms(100); // Max erase time 50ms
+
+    sst39_poll_dq7(0x0000, 0xFF);
+    sleep_ms(50);
 }
 
 void sst39_program_byte(uint32_t addr, uint8_t byte) {
+    // If byte is 0xFF, skip writing since the chip is already erased to 0xFF
+    if (byte == 0xFF) return;
+
     sst39_write_cmd(0x5555, 0xAA);
     sst39_write_cmd(0x2AAA, 0x55);
     sst39_write_cmd(0x5555, 0xA0);
     flash_write_cycle(addr, byte);
-    sleep_us(20); // Max byte-program time 20us
+
+    sst39_poll_dq7(addr, byte);
 }
 
 //-------------------------------------------------------------------------------------------------------------
@@ -167,6 +208,8 @@ int main() {
 
     enter_programming_mode();
     
+    check_sst39_id();
+
     printf("Erasing SST39VF040...\n");
     sst39_chip_erase();
 
@@ -179,28 +222,23 @@ int main() {
         }
     }
 
-    // Check if OpenOCD flashed the verification flag at 0x10088000
-    if (*verify_flag == 0x56455259) { // Magic "VERY"
-        printf("\nVerification flag detected. Reading back EEPROM...\n");
-        uint32_t errors = 0;
+    printf("\nReading back SST39VF040 for verification...\n");
+    uint32_t errors = 0;
 
-        for (uint32_t i = 0; i < 32768; i++) {
-            uint8_t read_val = flash_read_cycle(i);
-            if (read_val != payload[i]) {
-                if (errors < 10) {
-                    printf("Mismatch at 0x%04X: expected 0x%02X, got 0x%02X\n", i, payload[i], read_val);
-                }
-                errors++;
+    for (uint32_t i = 0; i < 32768; i++) {
+        uint8_t read_val = flash_read_cycle(i);
+        if (read_val != payload[i]) {
+            if (errors < 10) {
+                printf("Mismatch at 0x%04X: expected 0x%02X, got 0x%02X\n", i, payload[i], read_val);
             }
+            errors++;
         }
+    }
 
-        if (errors == 0) {
-            printf("Verification SUCCESSFUL! All 32KB matched.\n");
-        } else {
-            printf("Verification FAILED! Total errors: %u\n", errors);
-        }
+    if (errors == 0) {
+        printf("Verification SUCCESSFUL! All 32KB matched.\n");
     } else {
-        printf("\nVerification skipped.\n");
+        printf("Verification FAILED! Total errors: %u\n", errors);
     }
 
     release_bus();
