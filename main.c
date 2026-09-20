@@ -1,6 +1,6 @@
 //-------------------------------------------------------------------------------------------------------------
 // RP2350B SST39VF040 Programmer
-// Clean 32KB write with robust write timing and polling
+// Full programmer implementation with complete Hi-Z bus release
 //-------------------------------------------------------------------------------------------------------------
 
 #include "pico/stdlib.h"
@@ -13,12 +13,12 @@ static const uint PIN_POE  = 18;  // /POE_ROM
 static const uint PIN_PCS  = 22;  // /PCS_ROM
 static const uint PIN_PROG = 34;  // PROG (Bus isolation)
 
-// Flash Address Pins (PA0..PA18)
+// Flash Address Pins (A0..A18)
 static const uint ADDR_PINS[19] = {
     32, 25, 27, 29, 31, 33, 35, 37, 12, 14, 20, 16, 39, 10, 8, 41, 43, 6, 45
 };
 
-// Flash Data Pins (PD0..PD7)
+// Flash Data Pins (D0..D7)
 static const uint DATA_PINS[8] = {
     30, 28, 26, 23, 21, 19, 17, 24
 };
@@ -32,7 +32,7 @@ static const uint8_t *payload = (const uint8_t *)0x10080000;
 
 void set_address(uint32_t addr) {
     for (int i = 0; i < 19; i++) {
-        gpio_put(ADDR_PINS[i], (addr >> i) & 1);
+        gpio_put(ADDR_PINS[i], (addr >> i) & 0x01);
     }
 }
 
@@ -70,7 +70,7 @@ void flash_write_cycle(uint32_t addr, uint8_t data) {
 
     gpio_put(PIN_PCS, 0); // Assert /CE
     gpio_put(PIN_PWE, 0); // Assert /WE
-    sleep_us(2);          // tWP min is 100ns (2us gives clean margin)
+    sleep_us(2);          // tWP pulse width
 
     gpio_put(PIN_PWE, 1); // De-assert /WE (latches data on rising edge)
     gpio_put(PIN_PCS, 1); // De-assert /CE
@@ -111,7 +111,7 @@ void sst39_poll_dq7(uint32_t addr, uint8_t byte) {
     while (timeout--) {
         uint8_t read_val = flash_read_cycle(addr);
         if ((read_val & 0x80) == expected_dq7) {
-            return; // Programming/erase pass completed
+            return;
         }
         sleep_us(5);
     }
@@ -148,7 +148,6 @@ void sst39_chip_erase() {
 }
 
 void sst39_program_byte(uint32_t addr, uint8_t byte) {
-    // If byte is 0xFF, skip writing since the chip is already erased to 0xFF
     if (byte == 0xFF) return;
 
     sst39_write_cmd(0x5555, 0xAA);
@@ -186,13 +185,28 @@ void enter_programming_mode() {
 }
 
 void release_bus() {
+    // 1. Tristate and release Control Lines
     gpio_set_dir(PIN_PCS, GPIO_IN);
     gpio_set_dir(PIN_POE, GPIO_IN);
     gpio_set_dir(PIN_PWE, GPIO_IN);
 
-    for (int i = 0; i < 19; i++) gpio_set_dir(ADDR_PINS[i], GPIO_IN);
-    for (int i = 0; i < 8; i++)  gpio_set_dir(DATA_PINS[i], GPIO_IN);
+    gpio_disable_pulls(PIN_PCS);
+    gpio_disable_pulls(PIN_POE);
+    gpio_disable_pulls(PIN_PWE);
 
+    // 2. Tristate and release Address Bus
+    for (int i = 0; i < 19; i++) {
+        gpio_set_dir(ADDR_PINS[i], GPIO_IN);
+        gpio_disable_pulls(ADDR_PINS[i]);
+    }
+
+    // 3. Tristate and release Data Bus
+    for (int i = 0; i < 8; i++) {
+        gpio_set_dir(DATA_PINS[i], GPIO_IN);
+        gpio_disable_pulls(DATA_PINS[i]);
+    }
+
+    // 4. De-assert PROG line to disable isolation buffers
     gpio_put(PIN_PROG, 0);
 }
 
@@ -242,7 +256,7 @@ int main() {
     }
 
     release_bus();
-    printf("Programming complete! SBUS2 bus released.\n");
+    printf("Programming complete! Bus tristated and released.\n");
 
     while (1) {
         printf("Waiting.../\r");
