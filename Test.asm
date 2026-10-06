@@ -39,7 +39,11 @@ start:
     LDX #$E0            ; Hi byte limit, so E000-1 (DFFF)
     JSR FillMemory
 
+; Skip the TEXT print..
+;    JMP loop
+
 ; Print a null terminated string    
+DoString1:
     LDA #yellow
     STA CHAR_COLOUR
 
@@ -60,8 +64,34 @@ start:
     
     JSR PrintStringZ
     
+DoString2:
+    LDA #green
+    STA CHAR_COLOUR
+
+    ; Print alternate string
+    LDA #<PaulString2
+    STA <STRINGPTR_L
+    LDA #>PaulString2
+    STA <STRINGPTR_H
+    
+    LDA #<$C000
+    STA <SCREENPTR_L
+    LDA #>$C000
+    STA <SCREENPTR_H
+    
+    LDA #<$D000
+    STA <COLOURPTR_L
+    LDA #>$D000
+    STA <COLOURPTR_H
+    
+    JSR PrintStringZ
+    
+    JMP DoString1
+    
 loop:
     JMP loop
+
+TEMP_REG1   = $DF
 
 CHAR_COLOUR = $E0
 
@@ -75,6 +105,8 @@ COLOURPTR_L = $FA
 COLOURPTR_H = $FB
 
 PaulString:   .asciiz "HELLO PAUL"
+;PaulString:   .asciiz "HEXXO PAUL"
+PaulString2:   .asciiz "GOODBYE ME"
   
 ; Print a null terminated string
 PrintStringZ:
@@ -91,8 +123,12 @@ ReadChar:
     SBC #'A'-1
 NoSub:    
     
+    JSR Delay1Sec
+    
     ; Write char into screen
     STA (SCREENPTR_L),Y
+    
+    ;JSR Delay1Sec
     
     LDA CHAR_COLOUR
     STA (COLOURPTR_L),Y
@@ -133,6 +169,47 @@ fill_page_loop:
     BNE fill_loop       ; Continue if end page not reached
 
     PLA                 ; Clean up stack
+    RTS
+
+;-------------------------------------------------------------------------------------------------------------
+; Delay1Sec
+; 3-stage nested loop delay for a 1 MHz 6502 CPU (~1,000,000 cycles)
+; Preserves A, X, and Y registers
+;-------------------------------------------------------------------------------------------------------------
+Delay1Sec:
+    PHA                     ; Save registers on stack
+    TXA
+    PHA
+    TYA
+    PHA
+
+    ;LDA #13                 ; Outer loop counter (~1,000,000 total cycles)
+    ;LDA #6                 ; Outer loop counter 
+    LDA #4
+    STA TEMP_REG1
+
+OuterLoop:
+    LDX #200                ; Middle loop counter
+MiddleLoop:
+    LDY #127                ; Inner loop counter
+InnerLoop:
+    DEY                     ; 2 cycles
+    BNE InnerLoop           ; 3 cycles (2 when no branch)
+                            ; Inner loop takes (127 * 5) - 1 = 634 cycles
+
+    DEX                     ; 2 cycles
+    BNE MiddleLoop          ; 3 cycles
+                            ; Middle loop takes 200 * (634 + 5) - 1 = 127,799 cycles
+
+    DEC TEMP_REG1           ; 5 cycles (Zero Page)
+    BNE OuterLoop           ; 3 cycles
+                            ; Outer loop takes 13 * (127,799 + 8) - 1 = 1,661,490 -> tweak values below
+
+    PLA                     ; Restore registers
+    TAY
+    PLA
+    TAX
+    PLA
     RTS
     
 ; --- 4. Pad from current location up to 0x7FFC (CPU $FFFC) ---
