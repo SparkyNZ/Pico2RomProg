@@ -66,15 +66,19 @@ void flash_write_cycle(uint32_t addr, uint8_t data) {
     set_address(addr);
     write_data_bus(data);
     set_data_dir(true);
+#ifdef PDS_STABLE    
     sleep_us(1);          // Address/Data setup time
-
+#endif
     gpio_put(PIN_PCS, 0); // Assert /CE
     gpio_put(PIN_PWE, 0); // Assert /WE
+#ifdef PDS_STABLE
     sleep_us(2);          // tWP pulse width
-
+#endif
     gpio_put(PIN_PWE, 1); // De-assert /WE (latches data on rising edge)
     gpio_put(PIN_PCS, 1); // De-assert /CE
+#ifdef PDS_STABLE
     sleep_us(1);          // Hold time
+#endif
 
     set_data_dir(false);
 }
@@ -82,17 +86,23 @@ void flash_write_cycle(uint32_t addr, uint8_t data) {
 uint8_t flash_read_cycle(uint32_t addr) {
     set_address(addr);
     set_data_dir(false);
+#ifdef PDS_STABLE        
     sleep_us(1);
+#endif    
 
     gpio_put(PIN_PCS, 0); // Assert /CE
     gpio_put(PIN_POE, 0); // Assert /OE
+#ifdef PDS_STABLE    
     sleep_us(2);          // tAA max is 70ns
+#endif
 
     uint8_t val = read_data_bus();
 
     gpio_put(PIN_POE, 1);
     gpio_put(PIN_PCS, 1);
+#ifdef PDS_STABLE        
     sleep_us(1);
+#endif    
     return val;
 }
 
@@ -113,7 +123,9 @@ void sst39_poll_dq7(uint32_t addr, uint8_t byte) {
         if ((read_val & 0x80) == expected_dq7) {
             return;
         }
+#ifdef PDS_STABLE            
         sleep_us(5);
+#endif        
     }
     printf("Timeout polling DQ7 at address 0x%05X!\n", addr);
 }
